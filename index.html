@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<meta name="theme-color" content="#06090d" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="KirakHATØ" />
+<title>KIRAKHATØ QØ–034f — stabil Safari-állapotmegőrzés</title>
+<style>
+:root{color-scheme:dark;--bg:#06090d;--panel:#0b1118;--line:#1d2a36;--text:#d9e7f2;--muted:#71808d;--cyan:#66ddff;--blue:#4488ff;--node:#101923;--warn:#ffcc66}
+*{box-sizing:border-box}html,body,#root{margin:0;min-height:100%;background:var(--bg);color:var(--text);font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}button{padding:10px 14px;border-radius:8px;border:1px solid #2d3c49;background:#0d141c;color:#cbd7e1;cursor:pointer}button:disabled{opacity:.4;cursor:not-allowed}.btn-primary{border-color:var(--blue);background:#102239;color:#fff;font-weight:700}.badge{font-size:10px;border:1px solid #263542;border-radius:999px;padding:4px 8px;color:#93a5b5}.home{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:20px;padding:24px;text-align:center}.home h1{letter-spacing:8px;font-weight:900;font-size:clamp(34px,8vw,54px);margin:0}.sub{font-size:11px;opacity:.58;max-width:680px;line-height:1.5}.game{display:grid;grid-template-columns:minmax(0,1fr) 320px;min-height:100vh}.main{display:flex;flex-direction:column;border-right:1px solid var(--line)}.header{display:flex;gap:8px;padding:10px;border-bottom:1px solid var(--line);align-items:center;flex-wrap:wrap}.board-wrap{flex:1;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle at 50% 40%,#0d1822 0%,#05080c 70%);padding:8px}.moves{display:flex;gap:6px;padding:8px;border-top:1px solid var(--line);flex-wrap:wrap;max-height:150px;overflow:auto}.side{display:flex;flex-direction:column;background:#080d12;min-width:0}.section{padding:12px;border-bottom:1px solid var(--line)}.label{font-size:11px;opacity:.52;margin-bottom:6px}.mono{font-size:12px;word-break:break-word}.trail{overflow:auto;max-height:52vh}.trail-row{font-size:10px;padding:3px 0;color:#9fb0bd}.status{font-weight:800;color:var(--cyan)}.warning{color:var(--warn);font-size:10px;line-height:1.45;margin-top:8px}.result{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;padding:24px;text-align:center}@media(max-width:760px){.game{grid-template-columns:1fr}.main{border-right:0}.side{border-top:1px solid var(--line)}.trail{max-height:220px}.header{position:sticky;top:0;background:#071018;z-index:5}.board-wrap{min-height:52vh}}
+
+.import-panel[hidden]{display:none}
+.import-panel{margin-top:12px;padding:12px;border:1px solid #4488ff;border-radius:10px;background:#071521}
+#importText{display:block;width:100%;min-height:190px;padding:12px;margin:10px 0 12px;resize:vertical;background:#02070c;color:#e2f6ff;border:1px solid #5f87ad;border-radius:8px;font:13px/1.45 ui-monospace,SFMono-Regular,monospace;-webkit-user-select:text;user-select:text}
+#importFeedback{font-size:12px;line-height:1.5;white-space:pre-wrap;margin-top:8px}
+.import-action-row{display:flex;flex-wrap:wrap;gap:8px}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script>
+(() => {
+  'use strict';
+  const NODES=['A','B','C','D','E','F'];
+  const EDGES=[['A','B'],['B','C'],['C','D'],['D','E'],['E','F'],['F','A'],['A','D'],['B','E']];
+  const POS={A:{x:200,y:60},B:{x:340,y:140},C:{x:340,y:280},D:{x:200,y:360},E:{x:60,y:280},F:{x:60,y:140}};
+
+  function seededHash(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+  function mulberry32(a){return function(){let t=a+=0x6D2B79F5;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0)/4294967296}}
+  function makeDemoTarget(seed){const rnd=mulberry32(seededHash(seed)^0x9E3779B9),t={};NODES.forEach(n=>t[n]=Math.floor(rnd()*4));if(Object.values(t).every(v=>v===0))t.A=1;return t}
+  function clone(x){return JSON.parse(JSON.stringify(x))}
+  function genSeed(){return Math.random().toString(36).slice(2,8).toUpperCase()+'-'+Date.now().toString(36).toUpperCase()}
+  async function sha256Hex(s){const enc=new TextEncoder().encode(s);const buf=await crypto.subtle.digest('SHA-256',enc);return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('')}
+
+  class PlaceholderRingEngine{
+    initialState(seed){const rnd=mulberry32(seededHash(seed)),nodes={};NODES.forEach(n=>nodes[n]=Math.floor(rnd()*4));return{nodes,turn:0,seed,target:makeDemoTarget(seed),_engine:'PlaceholderRingEngine'}}
+    legalMoves(state){const m=[];for(const n of NODES){const neigh=EDGES.filter(e=>e[0]===n||e[1]===n).map(e=>e[0]===n?e[1]:e[0]);const sum=neigh.reduce((s,nb)=>s+(state.nodes[nb]||0),0);if(sum%2===0)m.push({id:`DEMO-INC-${n}`,from:n,action:'DEMO_INC'});for(const nb of neigh){if(state.nodes[n]!==state.nodes[nb]&&n<nb)m.push({id:`DEMO-SWP-${n}-${nb}`,from:n,to:nb,action:'DEMO_SWAP'})}}m.push({id:'DEMO-ROT-CW',action:'DEMO_ROTATE',params:{dir:'CW'}});m.push({id:'DEMO-ROT-CCW',action:'DEMO_ROTATE',params:{dir:'CCW'}});return m}
+    applyMove(state,move){const canonical=this.legalMoves(state).find(x=>x.id===move.id);if(!canonical)return{legal:false,reason:'ILLEGAL_MOVE'};const next={nodes:{...state.nodes},turn:state.turn+1,seed:state.seed,target:clone(state.target),_engine:'PlaceholderRingEngine'};if(canonical.action==='DEMO_INC')next.nodes[canonical.from]=(next.nodes[canonical.from]+1)%4;else if(canonical.action==='DEMO_SWAP'){const a=next.nodes[canonical.from],b=next.nodes[canonical.to];next.nodes[canonical.from]=b;next.nodes[canonical.to]=a}else if(canonical.action==='DEMO_ROTATE'){const vals=NODES.map(n=>next.nodes[n]);if(canonical.params.dir==='CW'){const l=vals.pop();vals.unshift(l)}else{const f=vals.shift();vals.push(f)}NODES.forEach((n,i)=>next.nodes[n]=vals[i])}return{legal:true,nextState:next,appliedMove:canonical}}
+    isTarget(s){return NODES.every(n=>s.nodes[n]===s.target[n])}
+  }
+
+  class CleanCoreAdapter{
+    constructor(suppliedEngine=null){this.suppliedEngine=suppliedEngine;this.status=suppliedEngine?'READY':'TODO_SUPPLIED_RULES_MISSING'}
+    initialState(...args){if(!this.suppliedEngine)return{error:'TODO: CLEAN CORE rules not supplied'};return this.suppliedEngine.initialState(...args)}
+    legalMoves(...args){if(!this.suppliedEngine)throw new Error('TODO: CLEAN CORE rules not supplied');return this.suppliedEngine.legalMoves(...args)}
+    applyMove(...args){if(!this.suppliedEngine)return{legal:false,reason:'TODO: CLEAN CORE rules not supplied'};return this.suppliedEngine.applyMove(...args)}
+  }
+
+  const engine=new PlaceholderRingEngine();
+  const adapter=new CleanCoreAdapter();
+  const root=document.getElementById('root');
+  let model={screen:'HOME',seed:genSeed(),state:null,history:[],blind:false,commit:'',result:'NOT_SOLVED'};
+  model.state=engine.initialState(model.seed);
+  const SAVE_KEY='KIRAKHATO_Q034B_DEMO_V02'; // régi kulcs megőrizve a kompatibilitásért
+  const BACKUP_KEY='KIRAKHATO_Q034C_BACKUP_V01';
+  const TEST_KEY='KIRAKHATO_Q034F_RESTART_CHALLENGE_V01';
+  const CURRENT_ENGINE='PlaceholderRingEngine';
+  let bootAudit='Indítási próba még nem indult.';
+  let swAudit='Egyfájlos HTTPS-verzió: az offline gyorsítótár kikapcsolva, az állapotmentés továbbra is helyi.';
+  let writeAudit='';
+  let saveProof='NINCS';
+  function fingerprint(m){return seededHash(JSON.stringify({seed:m.seed,state:m.state,history:m.history,screen:m.screen,blind:m.blind,commit:m.commit,result:m.result})).toString(16).padStart(8,'0').toUpperCase()}
+  function payload(m){return JSON.stringify({version:1,model:m,proof:fingerprint(m)})}
+   function unpackSave(data){const d=data && data.fullSave ? data.fullSave : data;if(!d || d.version!==1 || !validSaved(d.model) || d.proof!==fingerprint(d.model))throw new Error('érvénytelen JSON / ellenőrzőazonosító');return d.model}
+  let saveNotice='Új munkamenet';
+  function validSaved(m){
+    return m && ['HOME','GAME','RESULT'].includes(m.screen) &&
+      typeof m.seed==='string' && m.seed.length<100 &&
+      m.state && m.state.seed===m.seed && Number.isInteger(m.state.turn) &&
+      m.state.turn>=0 && m.state.turn<=100000 && m.state._engine==='PlaceholderRingEngine' &&
+      m.state.nodes && m.state.target &&
+      NODES.every(n=>Number.isInteger(m.state.nodes[n]) && m.state.nodes[n]>=0 && m.state.nodes[n]<4 &&
+        Number.isInteger(m.state.target[n]) && m.state.target[n]>=0 && m.state.target[n]<4) &&
+      Array.isArray(m.history) && m.history.length<=100000 &&
+      m.history.every(h=>h && h.move && typeof h.move.id==='string' && h.state && h.state.nodes) &&
+      typeof m.blind==='boolean' && typeof m.commit==='string' && typeof m.result==='string';
+  }
+  function persist(){
+    try{
+      const raw=payload(model);
+      // A két meglévő kulcsot használjuk: a QØ–034e exportokhoz kompatibilisen.
+      localStorage.setItem(BACKUP_KEY,raw);
+      localStorage.setItem(SAVE_KEY,raw);
+      const a=unpackSave(JSON.parse(localStorage.getItem(SAVE_KEY)));
+      const b=unpackSave(JSON.parse(localStorage.getItem(BACKUP_KEY)));
+      if(fingerprint(a)!==fingerprint(model)||fingerprint(b)!==fingerprint(model))throw new Error('A két mentés eltér az aktuális állapottól');
+      saveProof=fingerprint(model);
+      saveNotice='MENTÉS PASS · elsődleges és második másolat visszaolvasva';
+      writeAudit='Két helyi mentési példány egyezik.';
+      return true;
+    }catch(e){saveNotice='MENTÉS FAIL · '+e.message;writeAudit=saveNotice;return false}
+  }
+  function restore(){
+    const errors=[];
+    let hasAny=false;
+    for(const [key,label] of [[SAVE_KEY,'elsődleges'],[BACKUP_KEY,'második']]){
+      try{
+        const raw=localStorage.getItem(key);
+        if(!raw)continue;
+        hasAny=true;
+        const loaded=unpackSave(JSON.parse(raw));
+        model=clone(loaded);
+        saveProof=fingerprint(loaded);
+        saveNotice='VISSZAÁLLÍTÁS PASS · '+label+' helyi mentésből';
+        bootAudit='Friss betöltéskor korábbi állapot visszaolvasva: '+saveProof+' · TURN '+model.state.turn;
+        return;
+      }catch(e){errors.push(label+': '+e.message)}
+    }
+    if(!hasAny){saveNotice='ÚJ EREDET / NINCS HELYI MENTÉS · egyszeri JSON-import szükséges';bootAudit='Nincs korábbi helyi állapot ezen a webcímen.';return}
+    saveNotice='VISSZAÁLLÍTÁS FAIL · mindkét helyi mentés érvénytelen';
+    bootAudit='Mindkét mentés visszaolvasási hiba: '+errors.join('; ');
+  }
+  function evaluateRestartChallenge(){
+    let raw;
+    try{raw=localStorage.getItem(TEST_KEY)}catch(e){bootAudit='Indítási teszt tárhelyhiba: '+e.message;return}
+    if(!raw)return;
+    try{
+      const check=JSON.parse(raw);
+      if(!check||check.version!==1||typeof check.proof!=='string'||!Number.isInteger(check.turn))throw new Error('hibás próbaadat');
+      const actual=fingerprint(model);
+      const pass=!!(saveProof!=='NINCS' && actual===check.proof && model.state.turn===check.turn && model.seed===check.seed);
+      bootAudit=(pass?'ÚJRABETÖLTÉS PASS':'ÚJRABETÖLTÉS FAIL')+' · várt TURN '+check.turn+' · várt '+check.proof+' · kapott TURN '+model.state.turn+' · kapott '+actual;
+      try{localStorage.removeItem(TEST_KEY)}catch(e){}
+      if(pass)saveNotice='ÚJRABETÖLTÉS PASS · azonos állapot, napló és ellenőrzőazonosító';
+    }catch(e){bootAudit='ÚJRABETÖLTÉS FAIL · '+e.message}
+  }
+  restore();
+  evaluateRestartChallenge();
+  function makeRestartChallenge(){
+    if(model.screen!=='GAME')throw new Error('A játékoldalt nyisd meg előbb.');
+    if(!persist())throw new Error('A mentés visszaolvasása sikertelen.');
+    const check={version:1,proof:fingerprint(model),turn:model.state.turn,seed:model.seed,createdAt:new Date().toISOString()};
+    localStorage.setItem(TEST_KEY,JSON.stringify(check));
+    const again=JSON.parse(localStorage.getItem(TEST_KEY));
+    if(again.proof!==check.proof)throw new Error('Próbaazonosító nem olvasható vissza.');
+    return check;
+  }
+  function checkStorageMode(){
+    try{const k='KIRAKHATO_Q034F_PROBE';localStorage.setItem(k,'ok');if(localStorage.getItem(k)!=='ok')throw new Error('readback');localStorage.removeItem(k);return 'helyi írás/olvasás OK'}catch(e){return 'helyi tárolás elérhetetlen: '+e.message}
+  }
+  function environmentSummary(){
+    const embedded=window.top!==window.self;
+    const standalone=!!(window.matchMedia && matchMedia('(display-mode: standalone)').matches)||!!navigator.standalone;
+    const scheme=location.protocol;
+    const safe=(scheme==='https:'||location.hostname==='localhost'||location.hostname==='127.0.0.1');
+    return `CÍM: ${location.origin+location.pathname} · ${embedded?'BEÁGYAZOTT':'ÖNÁLLÓ'} · ${standalone?'FŐKÉPERNYŐS':'SAFARI LAP'} · ${safe?'BIZTONSÁGOS EREDET':'NEM HTTPS'} · ${checkStorageMode()}`;
+  }
+  let exportText='';
+  function exportPanel(){return `<div class="section" id="exportPanel"><div class="label">QØ–034c · EXPORT / BIZTONSÁGI MÁSOLAT</div><div class="warning">Ha az iPhone nem tölt le fájlt, a teljes JSON itt megjelenik. Jelöld ki, másold a Jegyzetekbe vagy a Fájlokba. Ez kézi biztonsági másolat, nem bizonyítja az automatikus visszaállítást.</div><textarea id="exportText" readonly spellcheck="false" style="width:100%;height:160px;background:#050a0f;color:#d9e7f2;border:1px solid #4488ff;border-radius:8px;padding:8px;margin-top:8px;font-size:12px">${esc(exportText)}</textarea><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px"><button id="selectExport">JSON kijelölése</button><button id="tryDownload">Letöltés újrapróbálása</button></div><div class="mono" id="exportStatus" style="margin-top:8px">A JSON elkészült. A fájlletöltés sikerét a böngésző nem igazolja.</div></div>`}
+  function bindExportPanel(){const t=document.getElementById('exportText');if(!t)return;document.getElementById('selectExport').onclick=()=>{t.focus();t.select();t.setSelectionRange(0,t.value.length)};document.getElementById('tryDownload').onclick=()=>attemptDownload(exportText,`kirakhato-${model.seed}.json`)}
+  function notice(){return `<div class="section" role="status"><div class="label">QØ–034f · tartós mentés / automatikus újranyitás</div><div class="mono status">${esc(saveNotice)}</div><div class="mono">AZONOSÍTÓ: <strong>${esc(saveProof)}</strong> · LÉPÉS: ${model.state.turn} · NAPLÓ: ${model.history.length}</div><div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:9px"><button id="verifySave">Mentés ellenőrzése</button><button id="backupSave">Teljes mentés JSON</button><button id="importSave">JSON fájl visszatöltése</button><button id="pasteSave">JSON beillesztése</button><input id="backupInput" type="file" accept=".json,application/json" style="display:none"></div>
+<div class="import-panel" id="importPanel" hidden>
+  <div class="mono status">JSON visszatöltése — beépített mező</div>
+  <div class="warning">Az egyszer már megőrzött QØ–034d / QØ–034e teljes JSON-mentést másold ide az egyszeri átköltözéshez. Ez külön mező az Exporttól! Csak a „Mentés visszaállítása” gomb módosítja a játékot.</div>
+  <label for="importText" class="mono">Régi JSON-mentés:</label>
+  <textarea id="importText" spellcheck="false" autocapitalize="off" autocomplete="off" autocorrect="off" placeholder='Ide illeszd a teljes JSON-t, az első { jeltől az utolsó } jelig'></textarea>
+  <div class="import-action-row"><button id="applyPastedSave" class="btn-primary">Mentés visszaállítása</button><button id="cancelPastedSave">Mégsem</button></div>
+  <div id="importFeedback" role="status" aria-live="polite">A jelenlegi állapot változatlan; csak ellenőrzött JSON tölthető be.</div>
+</div><div class="section" style="margin-top:10px;border:1px solid #33414d;border-radius:9px;padding:10px"><div class="label">QØ–034f · valódi újratöltés ellenőrzése</div>
+    <div id="bootAudit" class="mono" style="color:#66ddff">${esc(bootAudit)}</div><div class="mono" style="margin-top:8px;color:#99b8c9">${esc(environmentSummary())}</div>
+    <div class="mono" id="swStatus" style="margin-top:6px;color:#99b8c9">${esc(swAudit)}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px"><button id="reloadCheck" class="btn-primary">Mentés → oldal újratöltése → ellenőrzés</button><button id="closeCheck">Bezárási próba előkészítése</button></div>
+    <div class="warning">Előbb MENTS egy JSON-másolatot a Jegyzetekben! A frissítési próba csak állandó HTTPS-webcímen működik megbízhatóan; Convika-fájlelőnézetben a fájl ismét eltűnhet. A bezárás valós végrehajtását külön iPhone-képernyőképpel igazoljuk.</div>
+   </div><div class="warning">A helyi mentés böngészőadat: tárhelytörlés és iOS-eltávolítás esetén elveszhet. A kézi JSON biztonsági másolatot mindig őrizd meg.</div></div>`}
+  function saveAndRender(){persist();render()}
+  function bindSaveControls(){
+    const v=document.getElementById('verifySave');if(!v)return;
+    v.onclick=()=>{try{const a=unpackSave(JSON.parse(localStorage.getItem(SAVE_KEY)));const b=unpackSave(JSON.parse(localStorage.getItem(BACKUP_KEY)));if(fingerprint(a)!==fingerprint(model)||fingerprint(b)!==fingerprint(model))throw new Error('a két példány nem egyezik');saveProof=fingerprint(model);saveNotice='ELLENŐRZÉS PASS · két példány, állapot és napló egyezik'}catch(e){saveNotice='ELLENŐRZÉS FAIL · '+e.message}render()};
+    const reloadBtn=document.getElementById('reloadCheck');
+    if(reloadBtn)reloadBtn.onclick=()=>{
+      if(!confirm('Megvan a JSON-mentésed? Most a jelenlegi állást elmentjük, és AZONOS webcímen újratöltjük.'))return;
+      try{makeRestartChallenge();location.reload()}catch(e){bootAudit='TESZT NEM INDULT · '+e.message;render()}
+    };
+    const closeBtn=document.getElementById('closeCheck');
+    if(closeBtn)closeBtn.onclick=()=>{
+      try{const test=makeRestartChallenge();bootAudit='BEZÁRÁSI PRÓBA ELŐKÉSZÍTVE · TURN '+test.turn+' · '+test.proof+' · MOST zárd be a lapot, majd nyisd meg PONTOSAN ugyanazt a HTTPS-címet. A valódi bezárást a felhasználó igazolja.';render()}catch(e){bootAudit='TESZT NEM INDULT · '+e.message;render()}
+    };
+    document.getElementById('backupSave').onclick=()=>{exportText=JSON.stringify({fullSave:JSON.parse(payload(model))},null,2);render();const panel=document.getElementById('exportPanel');if(panel)panel.scrollIntoView({behavior:'smooth',block:'start'})};
+    const inp=document.getElementById('backupInput');document.getElementById('importSave').onclick=()=>inp.click();
+    inp.onchange=async()=>{try{const f=inp.files[0];if(!f)return;const restored=unpackSave(JSON.parse(await f.text()));model=restored;const ok=persist();saveNotice=ok?'IMPORT PASS · teljes állapot visszatöltve':'IMPORT BETÖLTVE · tartós mentés nem igazolt';render()}catch(e){saveNotice='IMPORT FAIL · '+e.message;render()}};
+    const importPanel=document.getElementById('importPanel');
+    const importText=document.getElementById('importText');
+    const importFeedback=document.getElementById('importFeedback');
+    document.getElementById('pasteSave').onclick=()=>{
+      importPanel.hidden=false;
+      importFeedback.textContent='Kérlek, illeszd ide a Jegyzetekben őrzött régi JSON-t. Az aktuális játékállapot még nem változott.';
+      importPanel.scrollIntoView({behavior:'smooth',block:'center'});
+      importText.focus();
+    };
+    document.getElementById('cancelPastedSave').onclick=()=>{importPanel.hidden=true;importText.value=''};
+    document.getElementById('applyPastedSave').onclick=()=>{
+      // Beillesztés után előbb ellenőrizzük az egész objektumot és a mentés ujjlenyomatát.
+      // Hibánál a játékmodellt és a helyi mentést változatlanul hagyjuk.
+      try{
+        const raw=importText.value.trim();
+        if(!raw)throw new Error('A beillesztési mező üres.');
+        const restored=unpackSave(JSON.parse(raw));
+        const oldProof=fingerprint(restored);
+        const oldTurn=restored.state.turn;
+        model=clone(restored);
+        exportText='';
+        const saved=persist();
+        saveNotice=(saved?'IMPORT PASS · beillesztett JSON betöltve, helyi tárhely ellenőrizve':'IMPORT BETÖLTVE · tartós tárolás nem igazolt')+' · eredeti ellenőrzőazonosító: '+oldProof;
+        render();
+        const area=document.getElementById('verifySave');
+        if(area)area.scrollIntoView({behavior:'smooth',block:'center'});
+      }catch(e){
+        importFeedback.textContent='IMPORT FAIL · '+e.message+' · a jelenlegi játékállapot változatlan';
+        importFeedback.style.color='#ffcc66';
+      }
+    };
+  }
+  window.addEventListener('pagehide',()=>persist());
+  document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden')persist()});
+
+  function esc(s){return String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+  function status(){if(engine.isTarget(model.state))return'SOLVED';return engine.legalMoves(model.state).length?'ACTIVE':'DEAD_END'}
+  function render(){if(model.screen==='HOME')return renderHome();if(model.screen==='RESULT')return renderResult();return renderGame()}
+  function renderHome(){root.innerHTML=`<div class="home"><h1>KIRAKHATØ</h1><div class="sub">DEMO LAYER — PlaceholderRingEngine | Visual Locked | Semantics NOT locked</div><div class="badge">ADAPTER BOUNDARY: ${adapter.status}</div><div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center"><button class="btn-primary" id="start">Start Demo Run</button><button id="blind">Blind UI Demo</button></div><div class="warning">A “Blind UI Demo” only hides the target from the screen. Because this is one self-contained HTML file, the target still exists in local memory; this is NOT a true cryptographic blind challenge.</div><div class="sub">Offline-capable: no React CDN, no npm, no backend.</div><div class="warning">QØ–034f: ${esc(saveNotice)}. Mentés csak ugyanazon HTTPS-eredeten áll vissza.</div><div class="sub">${esc(environmentSummary())}</div><div class="sub">${esc(bootAudit)}</div></div>`;document.getElementById('start').onclick=()=>start(false);document.getElementById('blind').onclick=()=>start(true)}
+  async function start(blind){exportText='';const seed=genSeed(),state=engine.initialState(seed);model={screen:'GAME',seed,state,history:[],blind,commit:'',result:'NOT_SOLVED'};if(blind&&globalThis.crypto&&crypto.subtle)model.commit=await sha256Hex(JSON.stringify(state.target)+'|'+seed);saveAndRender()}
+  function renderResult(){root.innerHTML=`<div class="result"><h2>${esc(model.result)}</h2><div class="sub">Engine: PlaceholderRingEngine — DEMO only</div><div class="warning">QØ–034f: ${esc(saveNotice)}</div>${exportText?exportPanel():''}<div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center"><button class="btn-primary" id="home">Home</button><button id="export">Export replay</button></div></div>`;document.getElementById('home').onclick=()=>{model.screen='HOME';saveAndRender()};document.getElementById('export').onclick=download;bindExportPanel()}
+  function renderGame(){const legal=engine.legalMoves(model.state),st=status();if(st==='SOLVED'){model.result='SOLVED';model.screen='RESULT';return render()}if(st==='DEAD_END'){model.result='DEAD_END';model.screen='RESULT';return render()}
+    const lines=EDGES.map(([a,b])=>`<line x1="${POS[a].x}" y1="${POS[a].y}" x2="${POS[b].x}" y2="${POS[b].y}" stroke="#24323e" stroke-width="1.2"/>`).join('');
+    const nodes=NODES.map(n=>{const p=POS[n],has=legal.some(m=>m.from===n||m.to===n),inc=legal.find(m=>m.from===n&&m.action==='DEMO_INC');return `<g data-inc="${inc?esc(inc.id):''}" style="cursor:${inc?'pointer':'default'}"><circle cx="${p.x}" cy="${p.y}" r="32" fill="#101923" stroke="${has?'#66ddff':'#33414d'}" stroke-width="${has?2.5:1.2}"/><text x="${p.x}" y="${p.y-2}" text-anchor="middle" fill="#e9f4fb" font-size="20" font-weight="700">${model.state.nodes[n]}</text><text x="${p.x}" y="${p.y+14}" text-anchor="middle" fill="#8899a6" font-size="11">${n}</text>${model.blind?'':`<text x="${p.x+25}" y="${p.y-18}" fill="#ffcc66" font-size="10">→${model.state.target[n]}</text>`}</g>`}).join('');
+    const swaps=legal.filter(m=>m.action==='DEMO_SWAP').map(m=>{const a=POS[m.from],b=POS[m.to],mx=(a.x+b.x)/2,my=(a.y+b.y)/2;return `<g data-move="${esc(m.id)}" style="cursor:pointer"><circle cx="${mx}" cy="${my}" r="12" fill="#0c1720" stroke="#4488ff" stroke-width="1"/><text x="${mx}" y="${my+3}" text-anchor="middle" fill="#66ddff" font-size="10">⇄</text></g>`}).join('');
+    root.innerHTML=`<div class="game"><div class="main"><div class="header"><strong>KIRAKHATØ</strong><span class="badge">QØ–034f · DEMO</span><span class="badge">STATUS ${st}</span><span class="badge">TURN ${model.state.turn}</span><span class="badge">SEED ${esc(model.seed)}</span><button id="undo" ${model.history.length?'':'disabled'}>Undo</button><button id="reset">Reset</button><button id="export">Export</button></div><div class="board-wrap"><svg viewBox="0 0 400 420" width="100%" style="max-width:480px;max-height:520px">${lines}${nodes}${swaps}</svg></div><div class="moves">${legal.map(m=>`<button data-move="${esc(m.id)}" style="font-size:10px">${esc(m.id)}</button>`).join('')}</div></div><div class="side">${notice()}${exportText?exportPanel():''}<div class="section"><div class="label">DEMO STATE</div><div class="mono">${NODES.map(n=>`${n}:${model.state.nodes[n]}`).join(' ')}</div><div class="label" style="margin-top:10px">ENGINE</div><div class="mono">PlaceholderRingEngine</div><div class="label" style="margin-top:10px">CLEAN CORE ADAPTER</div><div class="mono">${adapter.status}</div>${model.blind?`<div class="label" style="margin-top:10px">COMMITMENT</div><div class="mono">${esc(model.commit||'SHA-256 unavailable')}</div><div class="warning">UI-hidden target only; not a true blind protocol.</div>`:''}</div><div class="section trail"><div class="label">AUDIT TRAIL ${model.history.length}</div>${model.history.map((h,i)=>`<div class="trail-row">${String(i+1).padStart(2,'0')} ${esc(h.move.id)}</div>`).join('')||'<div class="trail-row">No moves yet</div>'}</div></div></div>`;
+    root.querySelectorAll('[data-move]').forEach(el=>el.onclick=()=>apply(el.getAttribute('data-move')));root.querySelectorAll('[data-inc]').forEach(el=>{const id=el.getAttribute('data-inc');if(id)el.onclick=()=>apply(id)});document.getElementById('undo').onclick=undo;document.getElementById('reset').onclick=reset;document.getElementById('export').onclick=download;bindSaveControls();bindExportPanel();
+  }
+  function apply(id){const move=engine.legalMoves(model.state).find(m=>m.id===id);if(!move)return;const r=engine.applyMove(model.state,move);if(!r.legal)return;model.history.push({move:clone(r.appliedMove),state:clone(model.state)});model.state=r.nextState;saveAndRender()}
+  function undo(){if(!model.history.length)return;const last=model.history.pop();model.state=last.state;saveAndRender()}
+  function reset(){model.state=engine.initialState(model.seed);model.history=[];saveAndRender()}
+  function oldDownload(){const replay={version:'KIRAKHATO-0.2-DEMO',seed:model.seed,moves:model.history.map(h=>h.move),finalState:model.state,result:status(),engine:'PlaceholderRingEngine',adapterStatus:adapter.status,blindUiDemo:model.blind,commitment:model.commit||null};const blob=new Blob([JSON.stringify(replay,null,2)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=`kirakhato-${model.seed}.json`;a.click();setTimeout(()=>URL.revokeObjectURL(url),500)}
+   function attemptDownload(json,filename){
+     try{const blob=new Blob([json],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),10000);const el=document.getElementById('exportStatus');if(el)el.textContent='Letöltési kísérlet elindítva; ellenőrizd a Letöltések mappát. A JSON a mezőben is megmarad.'}catch(e){const el=document.getElementById('exportStatus');if(el)el.textContent='Letöltés nem sikerült: '+e.message+' — a JSON szöveg kijelölhető.'}
+   }
+   function download(){
+     const replay={version:'KIRAKHATO-0.2-DEMO',seed:model.seed,moves:model.history.map(h=>h.move),finalState:model.state,result:status(),engine:'PlaceholderRingEngine',adapterStatus:adapter.status,blindUiDemo:model.blind,commitment:model.commit||null};
+     exportText=JSON.stringify({fullSave:JSON.parse(payload(model)),replay},null,2);
+     render();
+     const panel=document.getElementById('exportPanel');if(panel)panel.scrollIntoView({behavior:'smooth',block:'start'});
+     // User-initiated download remains an explicit separate button for iOS compatibility.
+   }
+   render();
+})();
+</script>
+</body>
+</html>
